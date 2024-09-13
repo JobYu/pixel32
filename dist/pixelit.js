@@ -1,6 +1,7 @@
 /**
  * pixelit - convert an image to Pixel Art, with/out grayscale and based on a color palette.
  * @author José Moreira @ <https://github.com/giventofly/pixelit>
+ * @author pixel32 @ <https://github.com/JobYu>
  **/
 
 class pixelit {
@@ -272,7 +273,50 @@ class pixelit {
     //remove temp element
     tempCanvas.remove();
 
+    // 在绘制到最终画布之前，添加一个降噪步骤
+    this.reduceNoise(tempCanvas, scaledW, scaledH);
+
     return this;
+  }
+
+  reduceNoise(canvas, width, height) {
+    const ctx = canvas.getContext('2d');
+    const imageData = ctx.getImageData(0, 0, width, height);
+    const data = imageData.data;
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const idx = (y * width + x) * 4;
+        const surroundingColors = this.getSurroundingColors(data, x, y, width, height);
+        const averageColor = this.calculateAverageColor(surroundingColors);
+
+        data[idx] = averageColor[0];
+        data[idx + 1] = averageColor[1];
+        data[idx + 2] = averageColor[2];
+      }
+    }
+
+    ctx.putImageData(imageData, 0, 0);
+  }
+
+  getSurroundingColors(data, x, y, width, height) {
+    const colors = [];
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+          const idx = (ny * width + nx) * 4;
+          colors.push([data[idx], data[idx + 1], data[idx + 2]]);
+        }
+      }
+    }
+    return colors;
+  }
+
+  calculateAverageColor(colors) {
+    const sum = colors.reduce((acc, color) => [acc[0] + color[0], acc[1] + color[1], acc[2] + color[2]], [0, 0, 0]);
+    return sum.map(channel => Math.round(channel / colors.length));
   }
 
   /**
@@ -302,6 +346,11 @@ class pixelit {
     const w = this.drawto.width;
     const h = this.drawto.height;
     var imgPixels = this.ctx.getImageData(0, 0, w, h);
+    
+    // 使用 K-means 聚类算法来确定最佳调色板
+    const optimalPalette = this.generateOptimalPalette(imgPixels.data, 16);
+    this.palette = optimalPalette;
+
     for (var y = 0; y < imgPixels.height; y++) {
       for (var x = 0; x < imgPixels.width; x++) {
         var i = y * 4 * imgPixels.width + x * 4;
@@ -318,6 +367,89 @@ class pixelit {
     }
     this.ctx.putImageData(imgPixels, 0, 0, 0, 0, imgPixels.width, imgPixels.height);
     return this;
+  }
+
+  generateOptimalPalette(imageData, k) {
+    // 实现 K-means 聚类算法来生成最佳调色板
+    // 这里只是一个简化版本，你可能需要一个更复杂的实现
+    const pixels = [];
+    for (let i = 0; i < imageData.length; i += 4) {
+      pixels.push([imageData[i], imageData[i + 1], imageData[i + 2]]);
+    }
+
+    let centroids = this.getRandomCentroids(pixels, k);
+    let oldCentroids = [];
+
+    while (!this.areEqual(centroids, oldCentroids)) {
+      oldCentroids = centroids;
+      let clusters = this.assignToClusters(pixels, centroids);
+      centroids = this.updateCentroids(clusters);
+    }
+
+    return centroids;
+  }
+
+  getRandomCentroids(pixels, k) {
+    const centroids = [];
+    const indices = [];
+    while (centroids.length < k) {
+      const randomIndex = Math.floor(Math.random() * pixels.length);
+      if (!indices.includes(randomIndex)) {
+        centroids.push(pixels[randomIndex]);
+        indices.push(randomIndex);
+      }
+    }
+    return centroids;
+  }
+
+  areEqual(arr1, arr2) {
+    if (arr1.length !== arr2.length) return false;
+    for (let i = 0; i < arr1.length; i++) {
+      if (!arr1[i].every((val, index) => val === arr2[i][index])) return false;
+    }
+    return true;
+  }
+
+  assignToClusters(pixels, centroids) {
+    const clusters = Array.from({ length: centroids.length }, () => []);
+    for (let i = 0; i < pixels.length; i++) {
+      const pixel = pixels[i];
+      let minDistance = Infinity;
+      let closestCentroidIndex = -1;
+      for (let j = 0; j < centroids.length; j++) {
+        const centroid = centroids[j];
+        const distance = this.calculateDistance(pixel, centroid);
+        if (distance < minDistance) {
+          minDistance = distance;
+          closestCentroidIndex = j;
+        }
+      }
+      clusters[closestCentroidIndex].push(pixel);
+    }
+    return clusters;
+  }
+
+  calculateDistance(pixel, centroid) {
+    let sum = 0;
+    for (let i = 0; i < pixel.length; i++) {
+      sum += Math.pow(pixel[i] - centroid[i], 2);
+    }
+    return Math.sqrt(sum);
+  }
+
+  updateCentroids(clusters) {
+    const centroids = [];
+    for (let i = 0; i < clusters.length; i++) {
+      const cluster = clusters[i];
+      if (cluster.length === 0) {
+        centroids.push([0, 0, 0]);
+        continue;
+      }
+      const sum = cluster.reduce((acc, pixel) => [acc[0] + pixel[0], acc[1] + pixel[1], acc[2] + pixel[2]], [0, 0, 0]);
+      const centroid = sum.map(channel => Math.round(channel / cluster.length));
+      centroids.push(centroid);
+    }
+    return centroids;
   }
 
   /**
